@@ -1,0 +1,6 @@
+.env
+.git
+README.md
+sql
+docker-compose.yml
+*.zip
