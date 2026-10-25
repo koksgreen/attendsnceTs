@@ -1,0 +1,41 @@
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${DB_NAME:-attendance_db}
+      MYSQL_USER: ${DB_USER:-attendance_user}
+      MYSQL_PASSWORD: ${DB_PASS:?set DB_PASS in .env}
+      TZ: Africa/Lagos
+    volumes:
+      - db_data:/var/lib/mysql                                   # data survives restarts
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro  # runs only on first start
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [app_net]
+
+  web:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    environment:
+      DB_HOST: db            # service name, not localhost
+      DB_NAME: ${DB_NAME:-attendance_db}
+      DB_USER: ${DB_USER:-attendance_user}
+      DB_PASS: ${DB_PASS}
+    networks: [app_net]
+
+networks:
+  app_net:
+
+volumes:
+  db_data:
