@@ -22,4 +22,4 @@ RUN chown -R root:root /var/www/html && chmod -R a=rX /var/www/html
 
 EXPOSE 80
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 \
-    CMD php -r 'exit(@file_get_contents("http://127.0.0.1/index.html") === false ? 1 : 0);'
+    CMD php -r 'exit(@file_get_contents("http://127.0.0.1/index.php") === false ? 1 : 0);'
