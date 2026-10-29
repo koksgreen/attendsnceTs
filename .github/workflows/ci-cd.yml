@@ -18,17 +18,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  
   test:
     name: Test PHP, JavaScript, Docker and MySQL
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
     env:
+      DB_PASS: ci_test_password
       DB_ROOT_PASSWORD: ci_test_root_password
       DB_NAME: attendance_test
       DB_USER: attendance_user
       DB_PASSWORD: ci_test_password
-      DB_HOST: db
+
 
     steps:
       - name: Check out source code
