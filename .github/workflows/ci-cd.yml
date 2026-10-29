@@ -1,0 +1,259 @@
+
+name: Attendance App CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: attendance-app-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test PHP, JavaScript, Docker and MySQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      DB_ROOT_PASSWORD: ci_test_root_password
+      DB_NAME: attendance_test
+      DB_USER: attendance_user
+      DB_PASSWORD: ci_test_password
+      DB_HOST: db
+
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@v6
+
+      # 1. Set up PHP 8.5
+      - name: Set up PHP 8.5
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: pdo, pdo_mysql, mysqli, mbstring, json, curl
+          tools: composer:v2
+          coverage: none
+
+      - name: Display PHP version
+        run: php -v
+
+      # 2. Check PHP syntax
+      - name: Check PHP syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find . \
+            -type d \( -name .git -o -name vendor -o -name node_modules \) -prune \
+            -o -type f -name '*.php' -print0 \
+            | xargs -0 -r -n1 php -l
+
+      # 3. Install PHP dependencies when Composer is used
+      - name: Install PHP dependencies
+        if: ${{ hashFiles('composer.json') != '' }}
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      # 4. Run PHPUnit tests when a test suite is configured
+      - name: Run PHPUnit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -x vendor/bin/phpunit ]; then
+            vendor/bin/phpunit
+          elif [ -f phpunit.xml ] || [ -f phpunit.xml.dist ]; then
+            echo "::error::PHPUnit configuration exists, but PHPUnit is not installed."
+            exit 1
+          else
+            echo "::warning::No PHPUnit test suite found. Add automated tests for full application coverage."
+          fi
+
+      # 5. Set up Node.js for JavaScript checks
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find . \
+            -type d \( -name .git -o -name vendor -o -name node_modules \) -prune \
+            -o -type f -name '*.js' -print0 \
+            | xargs -0 -r -n1 node --check
+
+      # 6. Validate Docker configuration
+      - name: Validate Docker Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build Docker image
+        run: docker build --tag attendance-app:ci .
+
+      # 7. Start the application and database
+      - name: Start application and MySQL
+        run: docker compose up -d --build
+
+      # 8. Wait for the application to respond over HTTP
+      - name: Test application HTTP response
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:8080/ >/dev/null; then
+              echo "Application HTTP check passed."
+              exit 0
+            fi
+
+            echo "Waiting for application... attempt $attempt/30"
+            sleep 5
+          done
+
+          echo "::error::Application did not respond successfully."
+          docker compose ps
+          docker compose logs --tail=100
+          exit 1
+
+      # 9. Always stop test containers
+      - name: Stop test containers
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+  deploy:
+    name: Deploy to AWS VPS
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main'
+
+    environment: production
+
+    steps:
+      - name: Validate deployment settings
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PROJECT_PATH: ${{ secrets.VPS_PROJECT_PATH }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          test -n "$VPS_HOST" || {
+            echo "::error::VPS_HOST secret is missing."
+            exit 1
+          }
+
+          test -n "$VPS_USER" || {
+            echo "::error::VPS_USER secret is missing."
+            exit 1
+          }
+
+          test -n "$VPS_PROJECT_PATH" || {
+            echo "::error::VPS_PROJECT_PATH secret is missing."
+            exit 1
+          }
+
+          test -n "$VPS_SSH_KEY" || {
+            echo "::error::VPS_SSH_KEY secret is missing."
+            exit 1
+          }
+
+          test -n "$VPS_KNOWN_HOSTS" || {
+            echo "::error::VPS_KNOWN_HOSTS secret is missing."
+            exit 1
+          }
+
+          if [[ ! "$VPS_PROJECT_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]]; then
+            echo "::error::VPS_PROJECT_PATH must be a safe absolute path."
+            exit 1
+          fi
+
+      # 10. Configure SSH securely
+      - name: Configure SSH
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+
+          chmod 600 "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+          ssh-keygen -y -f "$HOME/.ssh/deploy_key" >/dev/null
+
+      # 11. Deploy only after all test steps pass
+      - name: Deploy application to AWS VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PROJECT_PATH: ${{ secrets.VPS_PROJECT_PATH }}
+        run: |
+          set -euo pipefail
+
+          ssh \
+            -i "$HOME/.ssh/deploy_key" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" \
+            "bash -s -- '$VPS_PROJECT_PATH'" <<'REMOTE'
+          set -euo pipefail
+
+          PROJECT_PATH="$1"
+          cd "$PROJECT_PATH"
+
+          git fetch origin main
+          git reset --hard origin/main
+
+          docker compose config --quiet
+          docker compose up -d --build --remove-orphans
+          docker compose ps
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:8080/ >/dev/null; then
+              echo "Deployment and HTTP check passed."
+              exit 0
+            fi
+
+            echo "Waiting for deployed application... attempt $attempt/30"
+            sleep 5
+          done
+
+          echo "Deployment health check failed."
+          docker compose ps
+          docker compose logs --tail=100
+          exit 1
+          REMOTE
+
+      # 12. Remove temporary SSH credentials
+      - name: Clean up SSH credentials
+        if: always()
+        run: rm -f "$HOME/.ssh/deploy_key"
