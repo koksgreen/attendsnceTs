@@ -94,7 +94,14 @@ jobs:
             | xargs -0 -r -n1 node --check
 
       # 6. Validate Docker configuration
+      
       - name: Validate Docker Compose configuration
+        env:
+          DB_PASS: ci_test_password
+          DB_ROOT_PASSWORD: ci_test_root_password
+          DB_NAME: attendance_test
+          DB_USER: attendance_user
+          DB_PASSWORD: ci_test_password
         run: docker compose config --quiet
 
       - name: Build Docker image
