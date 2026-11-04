@@ -217,6 +217,9 @@ jobs:
 
           ssh-keygen -y -f "$HOME/.ssh/deploy_key" > /dev/null
 
+          ssh-keygen -lf "$HOME/.ssh/deploy_key"
+        
+
           echo "SSH key configured successfully."
 
       # 3. Test SSH authentication
