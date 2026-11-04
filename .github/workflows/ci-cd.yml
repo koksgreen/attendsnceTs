@@ -18,7 +18,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  
+
+  # ==========================================
+  # JOB 1: TEST APPLICATION
+  # ==========================================
   test:
     name: Test PHP, JavaScript, Docker and MySQL
     runs-on: ubuntu-latest
@@ -31,12 +34,11 @@ jobs:
       DB_USER: attendance_user
       DB_PASSWORD: ci_test_password
 
-
     steps:
       - name: Check out source code
         uses: actions/checkout@v6
 
-      # 1. Set up PHP 8.5
+      # 1. Set up PHP
       - name: Set up PHP 8.5
         uses: shivammathur/setup-php@v2
         with:
@@ -59,12 +61,12 @@ jobs:
             -o -type f -name '*.php' -print0 \
             | xargs -0 -r -n1 php -l
 
-      # 3. Install PHP dependencies when Composer is used
+      # 3. Install Composer dependencies when applicable
       - name: Install PHP dependencies
         if: ${{ hashFiles('composer.json') != '' }}
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      # 4. Run PHPUnit tests when a test suite is configured
+      # 4. Run PHPUnit tests when configured
       - name: Run PHPUnit tests
         shell: bash
         run: |
@@ -76,15 +78,16 @@ jobs:
             echo "::error::PHPUnit configuration exists, but PHPUnit is not installed."
             exit 1
           else
-            echo "::warning::No PHPUnit test suite found. Add automated tests for full application coverage."
+            echo "::warning::No PHPUnit test suite found."
           fi
 
-      # 5. Set up Node.js for JavaScript checks
+      # 5. Set up Node.js
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
+      # 6. Check JavaScript syntax
       - name: Check JavaScript syntax
         shell: bash
         run: |
@@ -95,25 +98,19 @@ jobs:
             -o -type f -name '*.js' -print0 \
             | xargs -0 -r -n1 node --check
 
-      # 6. Validate Docker configuration
-      
+      # 7. Validate Docker Compose configuration
       - name: Validate Docker Compose configuration
-        env:
-          DB_PASS: ci_test_password
-          DB_ROOT_PASSWORD: ci_test_root_password
-          DB_NAME: attendance_test
-          DB_USER: attendance_user
-          DB_PASSWORD: ci_test_password
         run: docker compose config --quiet
 
+      # 8. Build Docker image
       - name: Build Docker image
         run: docker build --tag attendance-app:ci .
 
-      # 7. Start the application and database
+      # 9. Start application and MySQL
       - name: Start application and MySQL
         run: docker compose up -d --build
 
-      # 8. Wait for the application to respond over HTTP
+      # 10. Test application HTTP response
       - name: Test application HTTP response
         shell: bash
         run: |
@@ -135,11 +132,15 @@ jobs:
           docker compose logs --tail=100
           exit 1
 
-      # 9. Always stop test containers
+      # 11. Stop test containers
       - name: Stop test containers
         if: always()
         run: docker compose down --volumes --remove-orphans
 
+
+  # ==========================================
+  # JOB 2: DEPLOY TO AWS VPS
+  # ==========================================
   deploy:
     name: Deploy to AWS VPS
     needs: test
@@ -153,6 +154,8 @@ jobs:
     environment: production
 
     steps:
+
+      # 1. Validate deployment secrets
       - name: Validate deployment settings
         shell: bash
         env:
@@ -194,8 +197,9 @@ jobs:
             exit 1
           fi
 
-      # 10. Configure SSH securely
+      # 2. Configure SSH securely
       - name: Configure SSH
+        shell: bash
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
@@ -207,12 +211,33 @@ jobs:
           printf '%s' "$VPS_SSH_KEY" | tr -d '\r' > "$HOME/.ssh/deploy_key"
           printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
 
+          chmod 700 "$HOME/.ssh"
           chmod 600 "$HOME/.ssh/deploy_key"
           chmod 600 "$HOME/.ssh/known_hosts"
 
           ssh-keygen -y -f "$HOME/.ssh/deploy_key" > /dev/null
 
-      # 11. Deploy only after all test steps pass
+          echo "SSH key configured successfully."
+
+      # 3. Test SSH authentication
+      - name: Test SSH authentication
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          ssh -vv \
+            -i "$HOME/.ssh/deploy_key" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o IdentitiesOnly=yes \
+            "$VPS_USER@$VPS_HOST" \
+            "whoami"
+
+      # 4. Deploy application to AWS VPS
       - name: Deploy application to AWS VPS
         shell: bash
         env:
@@ -229,19 +254,33 @@ jobs:
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=3 \
             -o StrictHostKeyChecking=yes \
+            -o IdentitiesOnly=yes \
             "$VPS_USER@$VPS_HOST" \
             "bash -s -- '$VPS_PROJECT_PATH'" <<'REMOTE'
+
           set -euo pipefail
 
           PROJECT_PATH="$1"
+
+          echo "Entering project directory..."
           cd "$PROJECT_PATH"
 
+          echo "Fetching latest application code..."
           git fetch origin main
+
+          echo "Updating application..."
           git reset --hard origin/main
 
+          echo "Validating Docker configuration..."
           docker compose config --quiet
+
+          echo "Building and restarting application..."
           docker compose up -d --build --remove-orphans
+
+          echo "Checking running containers..."
           docker compose ps
+
+          echo "Checking application HTTP response..."
 
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error \
@@ -250,17 +289,18 @@ jobs:
               exit 0
             fi
 
-            echo "Waiting for deployed application... attempt $attempt/30"
+            echo "Waiting for application... attempt $attempt/30"
             sleep 5
           done
 
           echo "Deployment health check failed."
           docker compose ps
           docker compose logs --tail=100
+
           exit 1
           REMOTE
 
-      # 12. Remove temporary SSH credentials
+      # 5. Remove temporary SSH credentials
       - name: Clean up SSH credentials
         if: always()
         run: rm -f "$HOME/.ssh/deploy_key"
