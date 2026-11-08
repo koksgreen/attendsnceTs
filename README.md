@@ -1,4 +1,4 @@
-# Simple Time Attendance
+# Simple Time AttendanceAPP
 
 PHP (PDO) + MySQL backend, HTML/CSS/vanilla JS frontend.
 Staff enter their details and press **Check in** or **Check out**. The server records the date and time (Africa/Lagos), so the browser clock cannot change it.
