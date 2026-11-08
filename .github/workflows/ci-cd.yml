@@ -222,6 +222,7 @@ jobs:
 
           # Verify that the private key is readable
           ssh-keygen -y -f "$HOME/.ssh/deploy_key" > /dev/null
+          ssh-keygen -lf "$HOME/.ssh/deploy_key"
 
           echo "SSH key configured successfully."
 
