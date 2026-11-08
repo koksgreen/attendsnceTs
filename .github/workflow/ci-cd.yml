@@ -27,7 +27,7 @@ jobs:
       DB_ROOT_PASSWORD: ci_test_root_password
       DB_NAME: attendance_test
       DB_USER: attendance_user
-      DB_PASSWORD: ci_test_password
+      DB_PASS: ci_test_password
       DB_HOST: db
 
     steps:
@@ -197,13 +197,19 @@ jobs:
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
 
-          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/deploy_key"
-          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          # Write the private key and remove Windows line endings
+          printf '%s\n' "$VPS_SSH_KEY" | tr -d '\r' > "$HOME/.ssh/deploy_key"
+
+          # Configure VPS host verification and remove Windows line endings
+          printf '%s\n' "$VPS_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
 
           chmod 600 "$HOME/.ssh/deploy_key"
           chmod 600 "$HOME/.ssh/known_hosts"
 
-          ssh-keygen -y -f "$HOME/.ssh/deploy_key" >/dev/null
+          # Verify that the private key can be read
+          ssh-keygen -y -f "$HOME/.ssh/deploy_key" > /dev/null
+
+          echo "SSH configuration successful."
 
       # 11. Deploy only after all test steps pass
       - name: Deploy application to AWS VPS
