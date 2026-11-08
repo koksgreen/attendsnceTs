@@ -197,11 +197,13 @@ jobs:
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
 
-          # Write the private key and remove Windows line endings
-          printf '%s\n' "$VPS_SSH_KEY" | tr -d '\r' > "$HOME/.ssh/deploy_key"
+          # Decode the Base64 private key
+          printf '%s' "$VPS_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/deploy_key"
 
-          # Configure VPS host verification and remove Windows line endings
+          # Configure VPS host verification
           printf '%s\n' "$VPS_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+
+         
 
           chmod 600 "$HOME/.ssh/deploy_key"
           chmod 600 "$HOME/.ssh/known_hosts"
